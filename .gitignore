@@ -1,0 +1,47 @@
+# ========== General ==========
+.DS_Store
+*.log
+*.tmp
+*.swp
+*.swo
+
+# ========== Environment Files ==========
+.env
+*.env
+
+# ========== VS Code ==========
+.vscode/
+
+# ========== Node (React Frontend) ==========
+client/node_modules/
+client/build/
+client/dist/
+client/.next/
+client/.cache/
+client/.env.local
+client/.env.development.local
+client/.env.production.local
+client/coverage/
+
+# ========== .NET (C# Backend) ==========
+server/bin/
+server/obj/
+server/.vs/
+server/*.user
+server/*.db
+server/*.sqlite
+server/.env
+server/appsettings.Development.json
+server/appsettings.Production.json
+
+# ========== Rider / JetBrains ==========
+.idea/
+
+# ========== Logs & Temporary ==========
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ========== Mac System ==========
+.DS_Store
