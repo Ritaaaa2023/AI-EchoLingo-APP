@@ -2,11 +2,15 @@ using System.Text;
 using DotNetEnv;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using server.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ✅ 加载 .env 文件内容
 DotNetEnv.Env.Load();
+
+builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+
 
 // ✅ 构建 JWT 配置从 env 读取
 var jwtKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");

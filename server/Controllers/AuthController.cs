@@ -2,111 +2,118 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
+
+using server.Services;
 using System.Security.Claims;
-using System.Text;
 
-[Route("api/auth")]
-[ApiController]
-public class AuthController : ControllerBase
+namespace server.Controllers
 {
-  private readonly UserManager<ApplicationUser> _userManager;
-  private readonly SignInManager<ApplicationUser> _signInManager;
-  private readonly IConfiguration _configuration;
-
-  public AuthController(
-      UserManager<ApplicationUser> userManager,
-      SignInManager<ApplicationUser> signInManager,
-      IConfiguration configuration)
+  [ApiController]
+  [Route("api/auth")]
+  public class AuthController : ControllerBase
   {
-    _userManager = userManager;
-    _signInManager = signInManager;
-    _configuration = configuration;
-  }
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly SignInManager<ApplicationUser> _signInManager;
+    private readonly IJwtTokenService _jwtTokenService;
+    private readonly IConfiguration _configuration;
 
-  // Step 1: redirect to Google login
-  [HttpGet("google-login")]
-  public IActionResult GoogleLogin(string returnUrl = "/")
-  {
-    var properties = _signInManager.ConfigureExternalAuthenticationProperties(
-        GoogleDefaults.AuthenticationScheme,
-        Url.Action(nameof(GoogleCallback), new { returnUrl }));
-
-    return Challenge(properties, GoogleDefaults.AuthenticationScheme);
-  }
-
-  // Step 2: callback from Google
-  [HttpGet("google-callback")]
-  public async Task<IActionResult> GoogleCallback(string returnUrl = "/")
-  {
-    var externalLoginInfo = await _signInManager.GetExternalLoginInfoAsync();
-    if (externalLoginInfo == null)
+    public AuthController(
+        UserManager<ApplicationUser> userManager,
+        SignInManager<ApplicationUser> signInManager,
+        IJwtTokenService jwtTokenService,
+        IConfiguration configuration)
     {
-      return BadRequest("Failed to retrieve external login info.");
+      _userManager = userManager;
+      _signInManager = signInManager;
+      _jwtTokenService = jwtTokenService;
+      _configuration = configuration;
     }
 
-    var email = externalLoginInfo.Principal.FindFirstValue(ClaimTypes.Email);
-    var name = externalLoginInfo.Principal.FindFirstValue(ClaimTypes.Name);
-
-    if (string.IsNullOrEmpty(email))
+    // ✅ 注册
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] RegisterDto dto)
     {
-      return BadRequest("Email not found from Google.");
-    }
+      var existingUser = await _userManager.FindByEmailAsync(dto.Email);
+      if (existingUser != null)
+        return BadRequest("User already exists.");
 
-    // Check if user exists
-    var user = await _userManager.FindByEmailAsync(email);
-    if (user == null)
-    {
-      user = new ApplicationUser
+      var user = new ApplicationUser
       {
-        UserName = email,
-        Email = email,
-        DisplayName = name ?? email,
+        UserName = dto.Email,
+        Email = dto.Email,
+        DisplayName = dto.DisplayName ?? dto.Email,
         EmailConfirmed = true
       };
 
-      var result = await _userManager.CreateAsync(user);
+      var result = await _userManager.CreateAsync(user, dto.Password);
       if (!result.Succeeded)
-      {
-        return BadRequest("Failed to create new user.");
-      }
+        return BadRequest(result.Errors);
 
-      await _userManager.AddLoginAsync(user, externalLoginInfo);
+      return Ok("User registered successfully.");
     }
 
-    // Sign in the user (optional if only issuing token)
-    await _signInManager.SignInAsync(user, isPersistent: false);
-
-    // Issue JWT token
-    var token = GenerateJwtToken(user);
-
-    // Redirect back to frontend with token
-    return Redirect($"{_configuration["ClientUrl"]}/login-success?token={token}");
-  }
-
-  private string GenerateJwtToken(ApplicationUser user)
-  {
-    var claims = new[]
+    // ✅ 登录
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginDto dto)
     {
-            new Claim(JwtRegisteredClaimNames.Sub, user.Email ?? ""),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(ClaimTypes.NameIdentifier, user.Id),
-            new Claim(ClaimTypes.Email, user.Email ?? "")
+      var user = await _userManager.FindByEmailAsync(dto.Email);
+      if (user == null)
+        return Unauthorized("Invalid email or password.");
+
+      var result = await _signInManager.CheckPasswordSignInAsync(user, dto.Password, false);
+      if (!result.Succeeded)
+        return Unauthorized("Invalid email or password.");
+
+      var token = _jwtTokenService.GenerateToken(user);
+      return Ok(new { token });
+    }
+
+    // ✅ Google 登录跳转
+    [HttpGet("google-login")]
+    public IActionResult GoogleLogin(string returnUrl = "/")
+    {
+      var properties = _signInManager.ConfigureExternalAuthenticationProperties(
+          GoogleDefaults.AuthenticationScheme,
+          Url.Action(nameof(GoogleCallback), new { returnUrl }));
+
+      return Challenge(properties, GoogleDefaults.AuthenticationScheme);
+    }
+
+    // ✅ Google 回调处理
+    [HttpGet("google-callback")]
+    public async Task<IActionResult> GoogleCallback(string returnUrl = "/")
+    {
+      var info = await _signInManager.GetExternalLoginInfoAsync();
+      if (info == null)
+        return BadRequest("Failed to retrieve external login info.");
+
+      var email = info.Principal.FindFirstValue(ClaimTypes.Email);
+      var name = info.Principal.FindFirstValue(ClaimTypes.Name);
+
+      if (string.IsNullOrEmpty(email))
+        return BadRequest("Email not found from Google.");
+
+      var user = await _userManager.FindByEmailAsync(email);
+      if (user == null)
+      {
+        user = new ApplicationUser
+        {
+          UserName = email,
+          Email = email,
+          DisplayName = name ?? email,
+          EmailConfirmed = true
         };
 
-    var key = new SymmetricSecurityKey(
-        Encoding.UTF8.GetBytes(_configuration["Jwt:Key"] ?? "default-key"));
+        var createResult = await _userManager.CreateAsync(user);
+        if (!createResult.Succeeded)
+          return BadRequest("Failed to create user.");
 
-    var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        await _userManager.AddLoginAsync(user, info);
+      }
 
-    var token = new JwtSecurityToken(
-        issuer: _configuration["Jwt:Issuer"],
-        audience: _configuration["Jwt:Audience"],
-        claims: claims,
-        expires: DateTime.UtcNow.AddDays(7),
-        signingCredentials: creds);
+      var token = _jwtTokenService.GenerateToken(user);
 
-    return new JwtSecurityTokenHandler().WriteToken(token);
+      return Redirect($"{_configuration["ClientUrl"]}/login-success?token={token}");
+    }
   }
 }
